@@ -8,12 +8,16 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import cookieParser from 'cookie-parser';
 import session from 'express-session';
 
-const RedisStore = require('connect-redis').default || require('connect-redis');
+// [수정됨] require 대신 import 사용
+import RedisStore from 'connect-redis';
 import Redis from 'ioredis';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
+
+  // 배포 환경(프록시) 신뢰 설정
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
 
   app.enableCors({
     origin: true,
@@ -30,29 +34,37 @@ async function bootstrap() {
   app.useGlobalInterceptors(new TransformInterceptor());
   app.useGlobalFilters(new HttpExceptionFilter());
 
-  // 쿠키 파서 적용
   app.use(cookieParser());
 
-  // 레디스 클라이언트 생성
-  const redisClient = new Redis({
-    host: configService.get<string>('REDIS_HOST'),
-    port: configService.get<number>('REDIS_PORT'),
-  });
+  // Redis 연결
+  const redisUrl = configService.get<string>('REDIS_URL');
+  let redisClient;
 
-  // [중요 3] secret이 undefined일 수 있다는 에러 해결
-  // get<string>으로 타입 명시하고, 만약 없으면 빈 문자열('')이라도 넣도록 처리
+  if (redisUrl) {
+    redisClient = new Redis(redisUrl);
+  } else {
+    redisClient = new Redis({
+      host: configService.get<string>('REDIS_HOST'),
+      port: configService.get<number>('REDIS_PORT'),
+    });
+  }
+
   const sessionSecret =
     configService.get<string>('SESSION_SECRET') || 'default_secret_key';
 
-  // 세션 설정
+  const isProduction = configService.get('NODE_ENV') === 'production';
+
   app.use(
     session({
-      store: new (RedisStore as any)({ client: redisClient }),
+      // [수정됨] new RedisStore(...) 로 깔끔하게 호출
+      store: new RedisStore({ client: redisClient }),
       secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
       cookie: {
         httpOnly: true,
+        secure: isProduction, // HTTPS 환경(Railway)이면 true
+        sameSite: isProduction ? 'none' : 'lax',
         maxAge: 1000 * 60 * 60 * 24,
       },
     }),
