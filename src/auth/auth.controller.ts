@@ -32,10 +32,16 @@ export class AuthController {
     @Session() session: Record<string, any>,
   ) {
     const user = await this.authService.validateUser(loginDto);
+
     session.user = user;
 
-    // [수정] { success, user } 객체를 리턴하지 않고, user만 리턴합니다.
-    // Interceptor가 자동으로 { success: true, data: user } 형태로 감싸줍니다.
+    await new Promise<void>((resolve, reject) => {
+      session.save((err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
     return user;
   }
 
