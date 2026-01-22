@@ -8,8 +8,6 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import cookieParser from 'cookie-parser';
 import session from 'express-session';
 import Redis from 'ioredis';
-
-// [1] 성공한 프로젝트처럼 Named Import 사용
 import { RedisStore } from 'connect-redis';
 
 async function bootstrap() {
@@ -17,11 +15,12 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
   const expressApp = app.getHttpAdapter().getInstance();
 
-  // [수정] Cloudflare를 쓴다면 프록시 홉이 늘어날 수 있으므로 1보다는 true(모두 신뢰)가 안전합니다.
+  // [1] Cloudflare + Railway 환경에서 프록시 신뢰 필수
   expressApp.set('trust proxy', true);
 
   app.enableCors({
-    origin: true,
+    // 프론트엔드 도메인을 명시하거나 true로 설정
+    origin: ['https://www.jincheoncenter.com'],
     credentials: true,
   });
 
@@ -37,30 +36,19 @@ async function bootstrap() {
 
   app.use(cookieParser());
 
-  // [3] Redis 연결
+  // [2] Redis 연결
   const redisUrl = configService.get<string>('REDIS_URL');
-  let redisClient;
-
-  if (redisUrl) {
-    redisClient = new Redis(redisUrl);
-  } else {
-    redisClient = new Redis({
-      host: configService.get<string>('REDIS_HOST'),
-      port: configService.get<number>('REDIS_PORT'),
-      password: configService.get<string>('REDIS_PASSWORD'),
-    });
-  }
+  const redisClient = redisUrl
+    ? new Redis(redisUrl)
+    : new Redis({
+        host: configService.get<string>('REDIS_HOST'),
+        port: configService.get<number>('REDIS_PORT'),
+        password: configService.get<string>('REDIS_PASSWORD'),
+      });
 
   const sessionSecret =
     configService.get<string>('SESSION_SECRET') || 'default_secret_key';
-
-  // 배포 환경인지 확인
   const isProduction = configService.get('NODE_ENV') === 'production';
-
-  // [중요!] 쿠키 도메인 설정 (새로고침 로그아웃 방지 핵심)
-  // 예: 도메인이 jincheon.net 이라면 '.jincheon.net' (앞에 점 필수!)
-  // 로컬(개발)에서는 undefined로 둬야 작동합니다.
-  const cookieDomain = isProduction ? '.내도메인.com' : undefined;
 
   app.use(
     session({
@@ -71,17 +59,18 @@ async function bootstrap() {
       secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
-
-      proxy: true,
-
+      proxy: true, // [중요] 보안 쿠키 전송을 위해 필수
       cookie: {
         httpOnly: true,
+        // [수정] 배포 환경에서는 무조건 true, 로컬은 환경변수에 따라 대응
         secure: isProduction,
-        // [수정] 도메인을 일치(.내도메인.com)시켰으므로 'lax'를 써도 공유가 됩니다. (더 안정적)
-        sameSite: isProduction ? 'lax' : 'lax',
 
-        // [핵심] 여기에 위에서 만든 도메인 변수를 넣습니다.
-        domain: cookieDomain,
+        // [핵심] 크로스 도메인(www <-> api) 간 가장 확실한 설정
+        // isProduction이 true일 때 'none', 아니면 'lax'
+        sameSite: isProduction ? 'none' : 'lax',
+
+        // [핵심] 앞에 점(.) 포함된 정확한 도메인
+        domain: isProduction ? '.jincheoncenter.com' : undefined,
 
         maxAge: 1000 * 60 * 60 * 24, // 1일
       },
