@@ -9,7 +9,7 @@ import cookieParser from 'cookie-parser';
 import session from 'express-session';
 import Redis from 'ioredis';
 
-// [1] 성공한 프로젝트처럼 Named Import 사용 ({ RedisStore })
+// [1] 성공한 프로젝트처럼 Named Import 사용
 import { RedisStore } from 'connect-redis';
 
 async function bootstrap() {
@@ -17,8 +17,8 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
   const expressApp = app.getHttpAdapter().getInstance();
 
-  // [2] 성공한 프로젝트 설정: 프록시 신뢰 (Railway 필수)
-  expressApp.set('trust proxy', 1);
+  // [수정] Cloudflare를 쓴다면 프록시 홉이 늘어날 수 있으므로 1보다는 true(모두 신뢰)가 안전합니다.
+  expressApp.set('trust proxy', true);
 
   app.enableCors({
     origin: true,
@@ -37,7 +37,7 @@ async function bootstrap() {
 
   app.use(cookieParser());
 
-  // [3] Redis 연결 (IORedis 버전으로 최적화)
+  // [3] Redis 연결
   const redisUrl = configService.get<string>('REDIS_URL');
   let redisClient;
 
@@ -47,7 +47,7 @@ async function bootstrap() {
     redisClient = new Redis({
       host: configService.get<string>('REDIS_HOST'),
       port: configService.get<number>('REDIS_PORT'),
-      password: configService.get<string>('REDIS_PASSWORD'), // 혹시 몰라 추가
+      password: configService.get<string>('REDIS_PASSWORD'),
     });
   }
 
@@ -57,25 +57,32 @@ async function bootstrap() {
   // 배포 환경인지 확인
   const isProduction = configService.get('NODE_ENV') === 'production';
 
+  // [중요!] 쿠키 도메인 설정 (새로고침 로그아웃 방지 핵심)
+  // 예: 도메인이 jincheon.net 이라면 '.jincheon.net' (앞에 점 필수!)
+  // 로컬(개발)에서는 undefined로 둬야 작동합니다.
+  const cookieDomain = isProduction ? '.내도메인.com' : undefined;
+
   app.use(
     session({
-      // [4] 성공한 프로젝트와 동일한 구조
       store: new RedisStore({
         client: redisClient,
-        prefix: 'sess:', // 예전 프로젝트처럼 prefix 추가 (구분하기 좋음)
+        prefix: 'sess:',
       }),
       secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
 
-      // [5] 성공한 프로젝트의 핵심 설정: proxy: true
       proxy: true,
 
       cookie: {
         httpOnly: true,
-        // Railway는 HTTPS이므로 true, 로컬은 false 자동 처리
         secure: isProduction,
-        sameSite: isProduction ? 'none' : 'lax',
+        // [수정] 도메인을 일치(.내도메인.com)시켰으므로 'lax'를 써도 공유가 됩니다. (더 안정적)
+        sameSite: isProduction ? 'lax' : 'lax',
+
+        // [핵심] 여기에 위에서 만든 도메인 변수를 넣습니다.
+        domain: cookieDomain,
+
         maxAge: 1000 * 60 * 60 * 24, // 1일
       },
     }),
