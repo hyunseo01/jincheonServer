@@ -9,15 +9,16 @@ import cookieParser from 'cookie-parser';
 import session from 'express-session';
 import Redis from 'ioredis';
 
-// [중요] 상단에서 connect-redis import를 제거했습니다.
-// 내부에서 require로 처리합니다.
+// [1] 성공한 프로젝트처럼 Named Import 사용 ({ RedisStore })
+import { RedisStore } from 'connect-redis';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
+  const expressApp = app.getHttpAdapter().getInstance();
 
-  // Railway 배포 환경(Nginx Proxy) 설정
-  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+  // [2] 성공한 프로젝트 설정: 프록시 신뢰 (Railway 필수)
+  expressApp.set('trust proxy', 1);
 
   app.enableCors({
     origin: true,
@@ -36,7 +37,7 @@ async function bootstrap() {
 
   app.use(cookieParser());
 
-  // Redis 클라이언트 생성
+  // [3] Redis 연결 (IORedis 버전으로 최적화)
   const redisUrl = configService.get<string>('REDIS_URL');
   let redisClient;
 
@@ -46,35 +47,36 @@ async function bootstrap() {
     redisClient = new Redis({
       host: configService.get<string>('REDIS_HOST'),
       port: configService.get<number>('REDIS_PORT'),
+      password: configService.get<string>('REDIS_PASSWORD'), // 혹시 몰라 추가
     });
   }
 
   const sessionSecret =
     configService.get<string>('SESSION_SECRET') || 'default_secret_key';
 
+  // 배포 환경인지 확인
   const isProduction = configService.get('NODE_ENV') === 'production';
-
-  // [핵심 해결책]
-  // 상단 import 대신 여기서 require로 불러옵니다.
-  // 모듈 시스템 차이(CommonJS/ESM)를 런타임에 직접 해결합니다.
-  let RedisStore: any = require('connect-redis');
-  // .default가 있으면 그걸 쓰고, 없으면 그냥 씁니다.
-  if (RedisStore.default) {
-    RedisStore = RedisStore.default;
-  }
 
   app.use(
     session({
-      // 이제 RedisStore는 무조건 생성자(Constructor)입니다.
-      store: new RedisStore({ client: redisClient }),
+      // [4] 성공한 프로젝트와 동일한 구조
+      store: new RedisStore({
+        client: redisClient,
+        prefix: 'sess:', // 예전 프로젝트처럼 prefix 추가 (구분하기 좋음)
+      }),
       secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
+
+      // [5] 성공한 프로젝트의 핵심 설정: proxy: true
+      proxy: true,
+
       cookie: {
         httpOnly: true,
+        // Railway는 HTTPS이므로 true, 로컬은 false 자동 처리
         secure: isProduction,
         sameSite: isProduction ? 'none' : 'lax',
-        maxAge: 1000 * 60 * 60 * 24,
+        maxAge: 1000 * 60 * 60 * 24, // 1일
       },
     }),
   );
