@@ -8,8 +8,8 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import cookieParser from 'cookie-parser';
 import session from 'express-session';
 
-// const RedisStore = require('connect-redis').default || require('connect-redis');
-// import Redis from 'ioredis';
+const RedisStore = require('connect-redis').default || require('connect-redis');
+import Redis from 'ioredis';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -34,10 +34,10 @@ async function bootstrap() {
   app.use(cookieParser());
 
   // 레디스 클라이언트 생성
-  // const redisClient = new Redis({
-  //   host: configService.get<string>('REDIS_HOST'),
-  //   port: configService.get<number>('REDIS_PORT'),
-  // });
+  const redisClient = new Redis({
+    host: configService.get<string>('REDIS_HOST'),
+    port: configService.get<number>('REDIS_PORT'),
+  });
 
   // [중요 3] secret이 undefined일 수 있다는 에러 해결
   // get<string>으로 타입 명시하고, 만약 없으면 빈 문자열('')이라도 넣도록 처리
@@ -47,7 +47,7 @@ async function bootstrap() {
   // 세션 설정
   app.use(
     session({
-      // store: new (RedisStore as any)({ client: redisClient }),
+      store: new (RedisStore as any)({ client: redisClient }),
       secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
