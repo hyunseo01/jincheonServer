@@ -7,18 +7,20 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 import cookieParser from 'cookie-parser';
 import session from 'express-session';
-import Redis from 'ioredis';
-import { RedisStore } from 'connect-redis';
+
+import connectRedis from 'connect-redis';
+import { createClient } from 'redis';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
   const expressApp = app.getHttpAdapter().getInstance();
 
-  // [1] Cloudflare + Railway 환경에서 프록시 신뢰 필수
+  // Cloudflare + Railway 프록시 신뢰 (secure cookie 필수)
   expressApp.set('trust proxy', true);
 
-  const allowedOrigins = new Set([
+  // CORS 허용 오리진
+  const allowedOrigins = new Set<string>([
     'https://www.jincheoncenter.com',
     'https://jincheoncenter.com',
     'https://jincheonweb-production.up.railway.app',
@@ -26,7 +28,7 @@ async function bootstrap() {
 
   app.enableCors({
     origin: (origin, callback) => {
-      // 서버-서버 요청이나 curl은 origin이 없을 수 있음
+      // 서버-서버 요청/curl 등 origin 없는 경우 허용
       if (!origin) return callback(null, true);
 
       if (allowedOrigins.has(origin)) return callback(null, true);
@@ -48,41 +50,50 @@ async function bootstrap() {
 
   app.use(cookieParser());
 
-  // [2] Redis 연결
+  // Redis (공식 redis client)
   const redisUrl = configService.get<string>('REDIS_URL');
-  const redisClient = redisUrl
-    ? new Redis(redisUrl)
-    : new Redis({
-        host: configService.get<string>('REDIS_HOST'),
-        port: configService.get<number>('REDIS_PORT'),
-        password: configService.get<string>('REDIS_PASSWORD'),
-      });
+  if (!redisUrl) {
+    throw new Error('REDIS_URL is missing');
+  }
+
+  const redisClient = createClient({ url: redisUrl });
+  redisClient.on('error', (err) => console.error('[Redis] client error:', err));
+  await redisClient.connect();
 
   const sessionSecret =
     configService.get<string>('SESSION_SECRET') || 'default_secret_key';
-  const isProduction = configService.get('NODE_ENV') === 'production';
+
+  // connect-redis@6 방식 (TS/ESM 꼬임 가장 안정적)
+  const RedisStore = connectRedis(session);
 
   app.use(
     session({
       store: new RedisStore({
-        client: redisClient,
+        client: redisClient as any,
         prefix: 'sess:',
       }),
+      name: 'connect.sid',
       secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
-      proxy: true, // [중요] 보안 쿠키 전송을 위해 필수
+      proxy: true,
       cookie: {
         httpOnly: true,
         secure: true,
         sameSite: 'none',
         domain: '.jincheoncenter.com',
         path: '/',
-        maxAge: 1000 * 60 * 60 * 24,
+        maxAge: 1000 * 60 * 60 * 24, // 1일
       },
     }),
   );
 
-  await app.listen(configService.get<number>('PORT') || 3050);
+  const port = configService.get<number>('PORT') || 3050;
+  await app.listen(port);
+  console.log(`[Nest] listening on port ${port}`);
 }
-bootstrap();
+
+bootstrap().catch((e) => {
+  console.error('Bootstrap failed:', e);
+  process.exit(1);
+});
