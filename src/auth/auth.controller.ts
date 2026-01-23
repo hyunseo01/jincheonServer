@@ -8,6 +8,7 @@ import {
   Res,
   Patch,
   Param,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import * as express from 'express'; // express 타입 사용
 import { AuthService } from './auth.service';
@@ -29,20 +30,25 @@ export class AuthController {
   @Post('login')
   async login(
     @Body() loginDto: LoginDto,
-    @Session() session: Record<string, any>,
+    @Session() session: any, // 타입을 any로 하여 세션 메소드 접근 허용
   ) {
     const user = await this.authService.validateUser(loginDto);
 
+    // [1] 세션에 유저 할당
     session.user = user;
 
-    await new Promise<void>((resolve, reject) => {
+    // [2] 수동 저장 대신, NestJS가 응답을 보내기 전에
+    // express-session이 자동으로 저장하도록 맡깁니다.
+    // 만약 수동 저장이 꼭 필요하다면 아래처럼 간결하게 씁니다.
+    return new Promise((resolve, reject) => {
       session.save((err) => {
-        if (err) reject(err);
-        else resolve();
+        if (err) {
+          console.error('세션 저장 에러:', err);
+          reject(new InternalServerErrorException('세션 저장 실패'));
+        }
+        resolve(user); // 저장 성공 후 유저 리턴
       });
     });
-
-    return user;
   }
 
   @Post('register')

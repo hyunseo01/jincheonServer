@@ -20,7 +20,11 @@ async function bootstrap() {
 
   app.enableCors({
     // 프론트엔드 도메인을 명시하거나 true로 설정
-    origin: ['https://www.jincheoncenter.com'],
+    origin: [
+      'https://www.jincheoncenter.com',
+      'https://jincheoncenter.com',
+      'https://jincheonweb-production.up.railway.app/login',
+    ],
     credentials: true,
   });
 
@@ -62,17 +66,11 @@ async function bootstrap() {
       proxy: true, // [중요] 보안 쿠키 전송을 위해 필수
       cookie: {
         httpOnly: true,
-        // [수정] 배포 환경에서는 무조건 true, 로컬은 환경변수에 따라 대응
-        secure: isProduction,
-
-        // [핵심] 크로스 도메인(www <-> api) 간 가장 확실한 설정
-        // isProduction이 true일 때 'none', 아니면 'lax'
-        sameSite: isProduction ? 'none' : 'lax',
-
-        // [핵심] 앞에 점(.) 포함된 정확한 도메인
-        domain: isProduction ? '.jincheoncenter.com' : undefined,
-
-        maxAge: 1000 * 60 * 60 * 24, // 1일
+        secure: true,
+        sameSite: 'none',
+        domain: '.jincheoncenter.com',
+        path: '/',
+        maxAge: 1000 * 60 * 60 * 24,
       },
     }),
   );
