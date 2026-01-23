@@ -18,13 +18,21 @@ async function bootstrap() {
   // [1] Cloudflare + Railway 환경에서 프록시 신뢰 필수
   expressApp.set('trust proxy', true);
 
+  const allowedOrigins = new Set([
+    'https://www.jincheoncenter.com',
+    'https://jincheoncenter.com',
+    'https://jincheonweb-production.up.railway.app',
+  ]);
+
   app.enableCors({
-    // 프론트엔드 도메인을 명시하거나 true로 설정
-    origin: [
-      'https://www.jincheoncenter.com',
-      'https://jincheoncenter.com',
-      'https://jincheonweb-production.up.railway.app/login',
-    ],
+    origin: (origin, callback) => {
+      // 서버-서버 요청이나 curl은 origin이 없을 수 있음
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.has(origin)) return callback(null, true);
+
+      return callback(new Error(`CORS blocked: ${origin}`), false);
+    },
     credentials: true,
   });
 
