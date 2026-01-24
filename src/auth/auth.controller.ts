@@ -4,111 +4,64 @@ import {
   Body,
   Get,
   UseGuards,
-  Session,
-  Res,
   Patch,
   Param,
-  InternalServerErrorException,
 } from '@nestjs/common';
-import * as express from 'express'; // express 타입 사용
 import { AuthService } from './auth.service';
-import { AuthGuard } from '../common/guards/auth.guard';
 import { CurrentUser } from '../common/decorators/user.decorator';
 import { User, UserRole } from './entities/user.entity';
-
-// DTO import
 import { LoginDto } from './dto/login.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileDto, UpdateUserByAdminDto } from './dto/update-user.dto';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('login')
-  async login(
-    @Body() loginDto: LoginDto,
-    @Session() session: any, // 타입을 any로 하여 세션 메소드 접근 허용
-  ) {
+  async login(@Body() loginDto: LoginDto) {
     const user = await this.authService.validateUser(loginDto);
-
-    // [1] 세션에 유저 할당
-    session.user = user;
-
-    // [2] 수동 저장 대신, NestJS가 응답을 보내기 전에
-    // express-session이 자동으로 저장하도록 맡깁니다.
-    // 만약 수동 저장이 꼭 필요하다면 아래처럼 간결하게 씁니다.
-    return new Promise((resolve, reject) => {
-      session.save((err) => {
-        if (err) {
-          console.error('세션 저장 에러:', err);
-          reject(new InternalServerErrorException('세션 저장 실패'));
-        }
-        resolve(user); // 저장 성공 후 유저 리턴
-      });
-    });
+    const accessToken = await this.authService.signAccessToken(user);
+    return { accessToken, user };
   }
 
   @Post('register')
   async register(@Body() createUserDto: CreateUserDto) {
     const newUser = await this.authService.register(createUserDto);
-
-    // [수정] 순수 데이터만 리턴
     return { id: newUser.id };
   }
 
+  // JWT에서는 서버 로그아웃이 실질적으로 없음
   @Post('logout')
-  async logout(
-    @Session() session: Record<string, any>,
-    // [수정] passthrough: true를 써야 인터셉터가 동작합니다.
-    @Res({ passthrough: true }) res: express.Response,
-  ) {
-    // 세션 삭제를 Promise로 감싸서 비동기 처리
-    await new Promise<void>((resolve, reject) => {
-      session.destroy((err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-
-    res.clearCookie('connect.sid');
-
-    // [수정] 리턴값을 주면 인터셉터가 data 안에 넣어줍니다.
+  async logout() {
     return { message: '로그아웃 되었습니다.' };
   }
 
   @Get('me')
-  @UseGuards(AuthGuard)
+  @UseGuards(JwtAuthGuard)
   async getMyProfile(@CurrentUser() user: User) {
-    // [수정] user 객체만 리턴 (이미 올바르게 되어 있었음)
     return user;
   }
 
   @Patch('profile')
-  @UseGuards(AuthGuard)
+  @UseGuards(JwtAuthGuard)
   async updateProfile(
     @CurrentUser() user: User,
     @Body() dto: UpdateProfileDto,
   ) {
-    const updatedUser = await this.authService.updateUser(user.id, dto);
-
-    // [수정] 불필요한 메시지 제거, 업데이트된 유저 객체만 리턴
-    return updatedUser;
+    return await this.authService.updateUser(user.id, dto);
   }
 
-  // 관리자용 유저 수정
   @Patch(':id')
-  @UseGuards(AuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.DEVELOPER)
   async updateUserByAdmin(
     @Param('id') id: string,
     @Body() dto: UpdateUserByAdminDto,
   ) {
-    const updatedUser = await this.authService.updateUser(id, dto);
-
-    // [수정] 업데이트된 유저 객체만 리턴
-    return updatedUser;
+    return await this.authService.updateUser(id, dto);
   }
 }

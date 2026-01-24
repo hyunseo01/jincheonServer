@@ -13,6 +13,7 @@ import { Team } from '../group/entities/team.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { UpdateUserByAdminDto } from './dto/update-user.dto';
+import { JwtService } from '@nestjs/jwt';
 
 @Injectable()
 export class AuthService implements OnApplicationBootstrap {
@@ -20,7 +21,15 @@ export class AuthService implements OnApplicationBootstrap {
     @InjectRepository(User)
     private userRepo: Repository<User>,
     @InjectRepository(Team) private teamRepo: Repository<Team>,
+    private jwtService: JwtService,
   ) {}
+
+  async signAccessToken(user: User) {
+    return await this.jwtService.signAsync({
+      sub: user.id,
+      role: user.role,
+    });
+  }
 
   // [수정됨] 서버 시작 시 '개발자(마스터)' 계정 확인 및 생성
   async onApplicationBootstrap() {
