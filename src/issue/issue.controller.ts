@@ -6,6 +6,7 @@ import {
   Param,
   Body,
   UseGuards,
+  Delete,
 } from '@nestjs/common';
 import { CreateIssueDto } from './dto/create-issue.dto';
 import { CreateCommentDto } from './dto/create-comment.dto';
@@ -51,5 +52,10 @@ export class IssuesController {
   @Patch(':id/status')
   toggleStatus(@Param('id') id: string, @CurrentUser() user: User) {
     return this.issuesService.toggleStatus(id, user);
+  }
+
+  @Delete(':id')
+  hardDelete(@Param('id') id: string, @CurrentUser() user: User) {
+    return this.issuesService.hardDelete(id, user);
   }
 }

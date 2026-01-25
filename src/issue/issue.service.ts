@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { MoreThanOrEqual, Repository } from 'typeorm';
 import { Issue } from './entities/issue.entity';
@@ -6,6 +10,10 @@ import { IssueTimeline, TimelineType } from './entities/issue-timeline.entity';
 import { CreateIssueDto } from './dto/create-issue.dto';
 import { BadgeColor, IssueStatus } from './issue.constant';
 import { CreateCommentDto } from './dto/create-comment.dto';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+
+dayjs.extend(utc);
 
 // 카테고리별 색상 매핑 (프론트와 통일)
 const CATEGORY_MAP: Record<string, BadgeColor> = {
@@ -15,6 +23,13 @@ const CATEGORY_MAP: Record<string, BadgeColor> = {
   입출고: BadgeColor.BLUE,
   배차: BadgeColor.PURPLE,
 };
+
+function toUtcMs(v: unknown): number {
+  if (!v) return 0;
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === 'string') return dayjs.utc(v).valueOf(); // 문자열도 UTC로 강제
+  return 0;
+}
 
 @Injectable()
 export class IssuesService {
@@ -31,9 +46,10 @@ export class IssuesService {
     const mentions = this.extractMentions(dto.description);
 
     // 2) 태그 및 우선순위 처리
-    // 첫 번째 카테고리를 우선순위(Priority)로 설정하고, 나머지는 태그로 저장하거나
-    // 프론트 로직에 맞춰 유연하게 저장. 여기선 첫 번째를 Priority로 뺍니다.
-    const priorityText = dto.categories[0] || '일반';
+    // 첫 번째 카테고리를 Priority로 빼고, 나머지만 tags로 저장 (중복 방지)
+    const [firstCategory, ...restCategories] = dto.categories ?? [];
+
+    const priorityText = firstCategory || '일반';
     const priorityColor = CATEGORY_MAP[priorityText] || BadgeColor.GRAY;
 
     const newIssue = this.issueRepo.create({
@@ -44,10 +60,13 @@ export class IssuesService {
       mentions,
       priorityText,
       priorityColor,
-      tags: dto.categories.map((cat) => ({
+
+      // Priority(첫 카테고리)는 제외하고 나머지만 tags로 저장
+      tags: restCategories.map((cat) => ({
         text: cat,
         color: CATEGORY_MAP[cat] || BadgeColor.GRAY,
       })),
+
       timelines: [
         {
           authorName: '시스템',
@@ -89,12 +108,8 @@ export class IssuesService {
 
       // 2순위: '유효 시간' 정렬 (최신순)
       // bumpedAt이 있으면 그것을, 없으면 createdAt을 기준 시간으로 잡음
-      const timeA = a.bumpedAt
-        ? new Date(a.bumpedAt).getTime()
-        : new Date(a.createdAt).getTime();
-      const timeB = b.bumpedAt
-        ? new Date(b.bumpedAt).getTime()
-        : new Date(b.createdAt).getTime();
+      const timeA = a.bumpedAt ? toUtcMs(a.bumpedAt) : toUtcMs(a.createdAt);
+      const timeB = b.bumpedAt ? toUtcMs(b.bumpedAt) : toUtcMs(b.createdAt);
 
       return timeB - timeA; // 내림차순 (큰 숫자가 위로 = 최신이 위로)
     });
@@ -172,11 +187,40 @@ export class IssuesService {
     return await this.issueRepo.save(issue);
   }
 
-  // [Helper] 멘션 추출 정규식
+  async hardDelete(id: string, user: { id: string; role?: string }) {
+    const issue = await this.issueRepo.findOne({ where: { id } });
+    if (!issue) throw new NotFoundException('이슈를 찾을 수 없습니다.');
+
+    const role = user.role;
+    const isAdminOrDev = role === 'admin' || role === 'developer';
+    const isOwner = !!issue.authorId && issue.authorId === user.id;
+
+    if (!isAdminOrDev && !isOwner) {
+      throw new ForbiddenException('삭제 권한이 없습니다.');
+    }
+
+    // 안전: 타임라인/태그가 FK로 issue를 물고 있으니 먼저 지워줌
+    // (cascade/remove 설정이 애매하면 이 방식이 가장 확실함)
+    await this.timelineRepo.delete({ issue: { id } as any });
+    // IssueTag는 별도 repo가 없다면 cascade on delete가 걸려있을 수도 있는데,
+    // 확실히 하려면 IssueTag repo 주입해서 같이 delete 처리하는 게 좋음.
+    // 지금 구조에서 tags가 issueId FK면 아래처럼 QueryBuilder로 지우는 방식 추천.
+    await this.issueRepo.manager
+      .createQueryBuilder()
+      .delete()
+      .from('issue_tag') // 실제 테이블명이 다르면 바꿔
+      .where('issueId = :id', { id })
+      .execute();
+
+    await this.issueRepo.delete(id);
+
+    return { deletedId: id };
+  }
+
   private extractMentions(text: string): string[] {
     const regex = /@(\S+)/g;
     const matches = text.match(regex);
     if (!matches) return [];
-    return matches.map((m) => m.substring(1)); // '@' 제거
+    return matches.map((m) => m.substring(1));
   }
 }
